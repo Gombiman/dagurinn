@@ -103,6 +103,12 @@ function repoInfo() {
 }
 const canSave = () => !!(store.get('token') && repoInfo());
 const canEdit = () => state.demo || canSave();
+// Hlutverk tækisins: 'parent' (má breyta öllu) eða id manneskju (má bara breyta sinni dagskrá).
+// Athugið: þetta er hindrun í viðmótinu, ekki aðgangsstýring – aðgangslykillinn getur tæknilega breytt öllu.
+const myRole = () => store.get('role') || 'parent';
+const isParent = () => state.demo || myRole() === 'parent';
+const canEditItem = (it) => canEdit() && (isParent() || it.person === myRole());
+async function pinHash(pin) { return b64(await crypto.subtle.digest('SHA-256', te.encode('dagurinn-pin|' + pin))); }
 
 /* ---------- GitHub ---------- */
 function ghHeaders() {
@@ -463,7 +469,8 @@ function openSheet(inner, onMount) {
   const root = $('#sheet-root');
   root.innerHTML = `<div class="scrim"><div class="sheet" role="dialog" aria-modal="true"><div class="grab"></div>${inner}</div></div>`;
   const scrim = $('.scrim', root);
-  const close = () => { root.innerHTML = ''; document.removeEventListener('keydown', onKey); };
+  // Lokar bara þessu blaði – ef annað blað hefur opnast í millitíðinni er því ekki lokað.
+  const close = () => { if (scrim.isConnected) scrim.remove(); document.removeEventListener('keydown', onKey); };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', onKey);
   scrim.addEventListener('click', (e) => { if (e.target === scrim) close(); });
@@ -526,6 +533,7 @@ function openForm({ title, desc, fields, values = {}, onSave, onDelete, validate
       const err = validate ? validate(v) : null;
       if (err) { $('#ferr', sheet).textContent = err; return; }
       const r = await onSave(v);
+      if (typeof r === 'string') { $('#ferr', sheet).textContent = r; return; }
       if (r !== false) close();
     });
     const del = $('[data-del]', sheet);
@@ -534,10 +542,10 @@ function openForm({ title, desc, fields, values = {}, onSave, onDelete, validate
 }
 
 /* ---------- skilgreiningar á formum ---------- */
-const personOptions = (withAll = true) => [...(withAll ? [['all', 'Öll fjölskyldan']] : []), ...state.data.people.map((p) => [p.id, p.name])];
+const personOptions = (withAll = true) => !isParent() ? state.data.people.filter((p) => p.id === myRole()).map((p) => [p.id, p.name]) : [...(withAll ? [['all', 'Öll fjölskyldan']] : []), ...state.data.people.map((p) => [p.id, p.name])];
 const placeOptions = () => [['', '– enginn staður –'], ...state.data.places.map((p) => [p.id, p.name])];
 const kindOptions = () => Object.entries(KINDS).map(([k, [l, i]]) => [k, `${i} ${l}`]);
-const defaultPerson = () => (state.person !== 'all' ? state.person : state.data.people[0]?.id || 'all');
+const defaultPerson = () => (!isParent() ? myRole() : state.person !== 'all' ? state.person : state.data.people[0]?.id || 'all');
 const needTitle = (v) => (!v.title ? 'Vantar heiti' : null);
 
 function weeklyFields() {
@@ -673,7 +681,7 @@ function openItem(key) {
   if (it.cancelled) lines.push(`<span class="badge bad">Fellur niður${it.reason && it.reason !== 'Fellur niður' ? ' – ' + esc(it.reason) : ''}</span>`);
 
   let actions = '';
-  if (canEdit()) {
+  if (canEditItem(it)) {
     if (src === 'weekly') {
       const w = state.data.weekly.find((x) => x.id === id);
       actions = `<div class="sec">Bara ${esc(DAYS[d.getDay()])} ${d.getDate()}. ${MONTHS[d.getMonth()]}</div><div class="menu">
@@ -708,14 +716,14 @@ function openItem(key) {
     return;
   }
   openSheet(`<h2>${iconOf(it)} ${esc(it.title)}</h2><div class="desc">${lines.join('<br>')}</div>
-    <p class="desc" style="font-size:13px">Til að breyta þarf að tengja þetta tæki við GitHub (Stillingar).</p>`);
+    <p class="desc" style="font-size:13px">${canEdit() ? 'Á þessum síma geturðu bara breytt þinni eigin dagskrá.' : 'Til að breyta þarf að tengja þetta tæki við GitHub (Stillingar).'}</p>`);
 }
 
 function openAdd() {
   openSheet(`<h2>Bæta við</h2><div class="menu">
     <button data-a="event"><span>📅 Stakur viðburður<br><small>T.d. tannlæknir, afmæli, leikur</small></span><span class="chev">›</span></button>
     <button data-a="weekly"><span>🔁 Fast atriði í hverri viku<br><small>Skóli, æfingar, fermingarfræðsla</small></span><span class="chev">›</span></button>
-    <button data-a="off"><span>🏖️ Frídagur eða starfsdagur<br><small>Skóli eða æfingar falla niður</small></span><span class="chev">›</span></button>
+    ${isParent() ? '<button data-a="off"><span>🏖️ Frídagur eða starfsdagur<br><small>Skóli eða æfingar falla niður</small></span><span class="chev">›</span></button>' : ''}
   </div><p class="desc" style="margin-top:12px;font-size:14px">Til að breyta einhverju sem er þegar á dagskrá (t.d. æfing færð eða felld niður) ýtirðu á það í listanum.</p>`,
   (sheet, close) => sheet.addEventListener('click', (e) => {
     const a = e.target.closest('[data-a]');
@@ -730,18 +738,23 @@ function openSettings() {
   const d = state.data;
   const ri = repoInfo();
   const list = (items, label, act) => items.map((x) => `<button data-a="${act}" data-id="${esc(x.id)}"><span>${label(x)}</span><span class="chev">›</span></button>`).join('');
-  const upcomingEvents = d.events.filter((e) => e.date >= ymd(new Date())).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
-  const weekly = [...d.weekly].sort((a, b) => (a.person + a.start).localeCompare(b.person + b.start));
+  const P = isParent();
+  const mine = (x) => P || x.person === myRole();
+  const roleName = P ? 'Foreldri – má breyta öllu' : `${personOf(myRole())?.name || '?'} – bara sín dagskrá`;
+  const upcomingEvents = d.events.filter((e) => mine(e) && e.date >= ymd(new Date())).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
+  const weekly = d.weekly.filter(mine).sort((a, b) => (a.person + a.start).localeCompare(b.person + b.start));
   openSheet(`<h2>Stillingar</h2>
-    <div class="sec">Fólk</div><div class="menu">${list(d.people, (p) => `<span style="color:${COLORS[p.color]}">●</span> ${esc(p.name)}`, 'person')}<button data-a="person-new">+ Bæta við manneskju</button></div>
+    ${P ? '' : `<p class="desc">Þessi sími tilheyrir <b>${esc(personOf(myRole())?.name || '?')}</b> og getur bara breytt hans eða hennar dagskrá.</p>`}
+    ${P ? `<div class="sec">Fólk</div><div class="menu">${list(d.people, (p) => `<span style="color:${COLORS[p.color]}">●</span> ${esc(p.name)}`, 'person')}<button data-a="person-new">+ Bæta við manneskju</button></div>` : ''}
     <div class="sec">Föst dagskrá</div><div class="menu">${list(weekly, (w) => `${iconOf(w)} ${esc(w.title)}<br><small>${esc(personOf(w.person)?.name || 'Öll')} · ${(w.days || []).map((n) => DAYS_ISO_SHORT[n]).join(', ')} · ${esc(w.start || '')}${w.end ? '–' + esc(w.end) : ''}</small>`, 'weekly')}<button data-a="weekly-new">+ Nýtt fast atriði</button></div>
-    <div class="sec">Staðir og ferðatími</div><div class="menu">${list(d.places, (p) => `📍 ${esc(p.name)}<br><small>${p.minutes ? esc(p.minutes) + ' mín' : 'enginn ferðatími'}${p.note ? ' · ' + esc(p.note) : ''}</small>`, 'place')}<button data-a="place-new">+ Nýr staður</button></div>
+    <div class="sec">Staðir og ferðatími</div><div class="menu">${P ? list(d.places, (p) => `📍 ${esc(p.name)}<br><small>${p.minutes ? esc(p.minutes) + ' mín' : 'enginn ferðatími'}${p.note ? ' · ' + esc(p.note) : ''}</small>`, 'place') : ''}<button data-a="place-new">+ Nýr staður</button></div>
     <div class="sec">Stakir viðburðir framundan</div><div class="menu">${list(upcomingEvents, (e) => `${iconOf(e)} ${esc(e.title)}<br><small>${esc(e.date)} ${esc(e.start || '')}</small>`, 'event')}<button data-a="event-new">+ Nýr viðburður</button></div>
-    <div class="sec">Frídagar og starfsdagar</div><div class="menu">${list([...d.offDays].sort((a, b) => a.date.localeCompare(b.date)), (o) => `🏖️ ${esc(o.title)}<br><small>${esc(o.date)}${o.to ? ' – ' + esc(o.to) : ''}</small>`, 'off')}<button data-a="off-new">+ Nýr frídagur</button></div>
+    ${P ? `<div class="sec">Frídagar og starfsdagar</div><div class="menu">${list([...d.offDays].sort((a, b) => a.date.localeCompare(b.date)), (o) => `🏖️ ${esc(o.title)}<br><small>${esc(o.date)}${o.to ? ' – ' + esc(o.to) : ''}</small>`, 'off')}<button data-a="off-new">+ Nýr frídagur</button></div>` : ''}
     <div class="sec">Þetta tæki</div><div class="menu">
-      <button data-a="github"><span>GitHub tenging<br><small>${canSave() ? `Getur breytt · ${esc(ri.owner)}/${esc(ri.repo)}` : 'Bara skoðun – ýttu til að tengja'}</small></span><span class="chev">›</span></button>
-      <button data-a="import"><span>Flytja inn gögn<br><small>Líma inn texta (JSON) t.d. frá Claude</small></span><span class="chev">›</span></button>
-      ${canSave() ? '<button data-a="password"><span>Skipta um fjölskyldulykilorð</span><span class="chev">›</span></button>' : ''}
+      <button data-a="github"><span>GitHub tenging<br><small>${canSave() ? `Getur breytt · ${esc(roleName)}` : 'Bara skoðun – ýttu til að tengja'}</small></span><span class="chev">›</span></button>
+      ${P ? `<button data-a="import"><span>Flytja inn gögn<br><small>Líma inn texta (JSON) t.d. frá Claude</small></span><span class="chev">›</span></button>
+      <button data-a="pin"><span>Foreldra-PIN<br><small>${d.settings.parentPin ? 'Virkt – þarf til að gera síma að foreldrasíma' : 'Ekki sett – ýttu til að setja'}</small></span><span class="chev">›</span></button>` : ''}
+      ${canSave() && P ? '<button data-a="password"><span>Skipta um fjölskyldulykilorð</span><span class="chev">›</span></button>' : ''}
       <button data-a="lock" style="color:var(--bad)"><span>Læsa síðunni á þessu tæki<br><small>Gleymir lykilorði og aðgangslykli</small></span></button>
     </div>`,
   (sheet, close) => sheet.addEventListener('click', (e) => {
@@ -756,8 +769,8 @@ function openSettings() {
       place: () => editPlace(find('places')), 'place-new': () => editPlace(null),
       event: () => editEvent(find('events')), 'event-new': () => editEvent(null),
       off: () => editOff(find('offDays')), 'off-new': () => editOff(null),
-      github: openGithub, import: openImport, password: openPassword,
-      lock: () => { if (confirm('Læsa síðunni á þessu tæki?')) { ['pw', 'token', 'owner', 'repo', 'file'].forEach((k) => store.set(k, null)); location.reload(); } },
+      github: openGithub, import: openImport, password: openPassword, pin: openPin,
+      lock: () => { if (confirm('Læsa síðunni á þessu tæki?')) { ['pw', 'token', 'owner', 'repo', 'file', 'role'].forEach((k) => store.set(k, null)); location.reload(); } },
     };
     acts[a.dataset.a] && acts[a.dataset.a]();
   }));
@@ -771,16 +784,31 @@ function openGithub() {
     fields: [
       { type: 'pair', fields: [{ key: 'owner', label: 'Notandi / org', placeholder: 'gretar' }, { key: 'repo', label: 'Repo', placeholder: 'dagurinn' }] },
       { key: 'token', label: 'Aðgangslykill', type: 'password', placeholder: 'github_pat_…', help: 'Contents: Read and write, bara fyrir þetta eina repo. Sjá leiðbeiningar í README.' },
+      { key: 'role', label: 'Þessi sími tilheyrir', type: 'select', options: [['', '– veldu –'], ['parent', 'Foreldri – má breyta öllu'], ...state.data.people.map((p) => [p.id, `${p.name} – bara sín dagskrá`])] },
+      ...(state.data.settings.parentPin && store.get('role') !== 'parent' ? [{ key: 'pin', label: 'Foreldra-PIN', type: 'password', help: 'Þarf aðeins ef skipta á yfir í Foreldri' }] : []),
     ],
-    values: { owner: ri.owner || '', repo: ri.repo || '', token: store.get('token') || '' },
-    validate: (v) => (!v.owner || !v.repo ? 'Vantar notanda og repo' : null),
+    values: { owner: ri.owner || '', repo: ri.repo || '', token: store.get('token') || '', role: store.get('role') || '' },
+    validate: (v) => (!v.owner || !v.repo ? 'Vantar notanda og repo' : v.token && !v.role ? 'Veldu hverjum síminn tilheyrir' : null),
     onSave: async (v) => {
+      if (v.role === 'parent' && store.get('role') !== 'parent' && state.data.settings.parentPin && (await pinHash(v.pin || '')) !== state.data.settings.parentPin) return 'Rangt foreldra-PIN';
+      store.set('role', v.role || null);
+      if (v.role !== 'parent') { state.person = v.role; store.set('person', v.role); }
       store.set('owner', v.owner); store.set('repo', v.repo); store.set('token', v.token || null);
       if (!v.token) { render(); return; }
       setStatus('Prófa tengingu…');
       try { await fetchRemote(); setStatus('Tengt ✓'); } catch (e) { setStatus(e.message === 'auth' ? 'Lykillinn virkar ekki' : 'Náði ekki sambandi við GitHub'); }
       render();
     },
+  });
+}
+
+function openPin() {
+  openForm({
+    title: 'Foreldra-PIN',
+    desc: 'Þarf til að breyta síma barns í foreldrasíma. Barnið á ekki að fá þetta PIN.',
+    fields: [{ key: 'pin', label: 'Nýtt PIN (4–8 tölustafir)', type: 'password' }, { key: 'pin2', label: 'Aftur', type: 'password' }],
+    validate: (v) => (!/^\d{4,8}$/.test(v.pin) ? 'Notaðu 4–8 tölustafi' : v.pin !== v.pin2 ? 'PIN-in eru ekki eins' : null),
+    onSave: async (v) => { mutate('settings', null, { parentPin: await pinHash(v.pin) }); setStatus('Foreldra-PIN sett'); },
   });
 }
 
@@ -856,7 +884,7 @@ function openSetup() {
     saveLabel: 'Búa til',
     validate: (v) => (!v.name ? 'Vantar nafn' : !v.owner || !v.repo || !v.token ? 'Vantar GitHub upplýsingar' : v.pw.length < 6 ? 'Lykilorð þarf minnst 6 stafi' : v.pw !== v.pw2 ? 'Lykilorðin eru ekki eins' : null),
     onSave: async (v) => {
-      store.set('owner', v.owner); store.set('repo', v.repo); store.set('token', v.token);
+      store.set('owner', v.owner); store.set('repo', v.repo); store.set('token', v.token); store.set('role', 'parent');
       state.pw = v.pw;
       const d = emptyData();
       d.people.push({ id: uid('u'), name: v.name, color: 'teal' });

@@ -50,6 +50,14 @@ Opnaðu síðuna → **Setja upp dagskrá** → nafn, aðgangslykill og fjölsky
 | Staðir og ferðatími („Farðu út kl.“) | ⚙︎ → Staðir og ferðatími – t.d. *Egilshöll · 25 mín · Strætó leið 6* |
 | Fólk | ⚙︎ → Fólk |
 
+### Hver má breyta hverju?
+Hver sími er stilltur undir ⚙︎ → **GitHub tenging → Þessi sími tilheyrir**:
+- **Foreldri** – má breyta öllu: öllu fólki, frídögum, stöðum, innflutningi.
+- **Nafn barns** – má bara bæta við og breyta *sinni eigin* dagskrá. Sér allt hitt en getur ekki breytt því.
+
+Settu **Foreldra-PIN** (⚙︎ → Foreldra-PIN) svo barn geti ekki sjálft skipt símanum sínum yfir í „Foreldri“.
+Athugið: þetta er læsing í viðmótinu, ekki fullkomin aðgangsstýring – aðgangslykillinn sjálfur getur tæknilega breytt öllu í repoinu. Allar breytingar sjást í sögu repoins (*Commits*) og hægt er að afturkalla þær. Notaðu sérstakan aðgangslykil fyrir hvern síma svo hægt sé að eyða einum án þess að hinir hætti að virka.
+
 Breytingar vistast sjálfkrafa. Önnur tæki sjá þær eftir 1–10 mín. (eða strax með ↻).
 
 ### Flytja inn gögn
